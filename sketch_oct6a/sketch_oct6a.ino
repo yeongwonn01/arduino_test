@@ -64,33 +64,23 @@ void loop() {
   BLEDevice central = BLE.central();
   
   if (central) {
-    Serial.print("Connected to central: ");
-    Serial.println(central.address());
-
-    // Keep checking if central is connected
+    // Keep processing while central is connected
     while (central.connected()) {
-      // If data is written to the RX characteristic
+      // Check if the RX characteristic has been written to
       if (rxCharacteristic.written()) {
-        // Get the length of the received value
+        // Read the incoming data
         int length = rxCharacteristic.valueLength();
-        
-        // Allocate a buffer to hold the received data
         char receivedData[length + 1];
-        
-        // Copy the data into the buffer
         memcpy(receivedData, rxCharacteristic.value(), length);
-        
-        // Null-terminate the string
-        receivedData[length] = '\0';
-        
-        // Print received data to Serial Monitor
-        Serial.print("Received from central: ");
+        receivedData[length] = '\0'; // Null terminate the string
+
+        // Print the received data to the serial monitor
         Serial.println(receivedData);
 
-        // Echo back the received data to central
-        txCharacteristic.writeValue((const uint8_t*)receivedData, length);
-        Serial.print("Sent back to central: ");
-        Serial.println(receivedData);
+        // Reset the characteristic to avoid reprinting the same data
+        rxCharacteristic.writeValue(""); // Reset the value or clear the characteristic
+
+        // Optionally, clear or reset the characteristic's internal state here if needed
       }
     }
 
