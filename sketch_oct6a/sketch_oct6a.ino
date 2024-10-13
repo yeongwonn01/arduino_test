@@ -1,90 +1,66 @@
-#include <ArduinoBLE.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
-// BLE Service UUID
-BLEService customService("12345678-1234-5678-1234-56789abcdef0");
+BLEServer* pServer = NULL;
+BLECharacteristic* pCharacteristic = NULL;
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+uint32_t value = 0;
 
-// BLE Characteristic UUIDs (RX/TX)
-BLECharacteristic rxCharacteristic("12345678-1234-5678-1234-56789abcdef1", BLEWrite, 20); // RX (Write)
-BLECharacteristic txCharacteristic("12345678-1234-5678-1234-56789abcdef2", BLERead | BLENotify, 20); // TX (Notify)
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-// Function to handle when data is received
-void onReceive(BLEDevice central, BLECharacteristic characteristic) {
-  // Get the length of the received value
-  int length = characteristic.valueLength();
-  
-  // Allocate a buffer to hold the received data
-  char receivedData[length + 1];
-  
-  // Copy the data into the buffer
-  memcpy(receivedData, characteristic.value(), length);
-  
-  // Null-terminate the string
-  receivedData[length] = '\0';
-  
-  // Print the received data to the serial monitor
-  Serial.print("Received from central: ");
-  Serial.println(receivedData);
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      deviceConnected = true;
+    };
 
-  // Echo the received data back to the central
-  txCharacteristic.writeValue((const uint8_t*)receivedData, length);
-  Serial.print("Sent back to central: ");
-  Serial.println(receivedData);
-}
+    void onDisconnect(BLEServer* pServer) {
+      deviceConnected = false;
+    }
+};
 
 void setup() {
   Serial.begin(115200);
+  BLEDevice::init("ESP32");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  BLEService *pService = pServer->createService(SERVICE_UUID);
 
-  // Begin BLE initialization
-  if (!BLE.begin()) {
-    Serial.println("Starting BLE failed!");
-    while (1);
-  }
-
-  // Set advertised device name and service
-  BLE.setLocalName("Nano-ESP32-BLE");
-  BLE.setAdvertisedService(customService);
-
-  // Add characteristics to the service
-  customService.addCharacteristic(rxCharacteristic);
-  customService.addCharacteristic(txCharacteristic);
-
-  // Add service to BLE
-  BLE.addService(customService);
-
-  // Set initial values for characteristics
-  txCharacteristic.writeValue("Hello Central!");
-
-  // Start advertising
-  BLE.advertise();
-  Serial.println("BLE device active, waiting for connections...");
+/***********************************************/
+/* PROPERTY_NOTIFY 외에 모든 속성 삭제         */
+/***********************************************/
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_NOTIFY
+                    );
+                                        
+  pCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(false);
+  pAdvertising->setMinPreferred(0x0);
+  BLEDevice::startAdvertising();
+  Serial.println("Waiting a client connection to notify...");
 }
 
 void loop() {
-  // Wait for a BLE central to connect
-  BLEDevice central = BLE.central();
-  
-  if (central) {
-    // Keep processing while central is connected
-    while (central.connected()) {
-      // Check if the RX characteristic has been written to
-      if (rxCharacteristic.written()) {
-        // Read the incoming data
-        int length = rxCharacteristic.valueLength();
-        char receivedData[length + 1];
-        memcpy(receivedData, rxCharacteristic.value(), length);
-        receivedData[length] = '\0'; // Null terminate the string
-
-        // Print the received data to the serial monitor
-        Serial.println(receivedData);
-
-        // Reset the characteristic to avoid reprinting the same data
-        rxCharacteristic.writeValue(""); // Reset the value or clear the characteristic
-
-        // Optionally, clear or reset the characteristic's internal state here if needed
-      }
+    if (deviceConnected) {
+        pCharacteristic->setValue((uint8_t*)&value, 4);
+        pCharacteristic->notify();
+        value++;
+        delay(3);
     }
-
-    // Central disconnected
-    Serial.println("Central disconnected");
-  }
+    if (!deviceConnected && oldDeviceConnected) {
+        delay(500);
+        pServer->startAdvertising();
+        Serial.println("start advertising");
+        oldDeviceConnected = deviceConnected;
+    }
+    if (deviceConnected && !oldDeviceConnected) {
+        oldDeviceConnected = deviceConnected;        
+    }    
 }
