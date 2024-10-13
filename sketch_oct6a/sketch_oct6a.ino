@@ -1,66 +1,79 @@
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <ArduinoBLE.h>
 
-BLEServer* pServer = NULL;
-BLECharacteristic* pCharacteristic = NULL;
-bool deviceConnected = false;
-bool oldDeviceConnected = false;
-uint32_t value = 0;
+// BLE 서비스 UUID
+BLEService customService("12345678-1234-5678-1234-56789abcdef0");
 
-#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      deviceConnected = true;
-    };
-
-    void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
-    }
-};
+// BLE 특성 UUID (RX/TX)
+BLECharacteristic rxCharacteristic("12345678-1234-5678-1234-56789abcdef1", BLEWrite, 20); // RX (쓰기)
+BLECharacteristic txCharacteristic("12345678-1234-5678-1234-56789abcdef2", BLERead | BLENotify, 20); // TX (알림)
 
 void setup() {
   Serial.begin(115200);
-  BLEDevice::init("ESP32");
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-  BLEService *pService = pServer->createService(SERVICE_UUID);
 
-/***********************************************/
-/* PROPERTY_NOTIFY 외에 모든 속성 삭제         */
-/***********************************************/
-  pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      BLECharacteristic::PROPERTY_NOTIFY
-                    );
-                                        
-  pCharacteristic->addDescriptor(new BLE2902());
-  pService->start();
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(false);
-  pAdvertising->setMinPreferred(0x0);
-  BLEDevice::startAdvertising();
-  Serial.println("Waiting a client connection to notify...");
+  // BLE 초기화 시작
+  if (!BLE.begin()) {
+    Serial.println("Starting BLE failed!");
+    while (1);
+  }
+
+  // 광고할 장치 이름과 서비스를 설정
+  BLE.setLocalName("Nano-ESP32-BLE");
+  BLE.setAdvertisedService(customService);
+
+  // 서비스에 특성을 추가
+  customService.addCharacteristic(rxCharacteristic);
+  customService.addCharacteristic(txCharacteristic);
+
+  // BLE에 서비스 추가
+  BLE.addService(customService);
+
+  // 특성의 초기 값 설정
+  txCharacteristic.writeValue("Hello Central!");
+
+  // 광고 시작
+  BLE.advertise();
+  Serial.println("BLE device active, waiting for connections...");
 }
 
 void loop() {
-    if (deviceConnected) {
-        pCharacteristic->setValue((uint8_t*)&value, 4);
-        pCharacteristic->notify();
-        value++;
-        delay(3);
+  // BLE 중앙 장치가 연결될 때까지 대기
+  BLEDevice central = BLE.central();
+  
+  if (central) {
+    Serial.print("Connected to central: ");
+    Serial.println(central.address());
+
+    // 중앙 장치가 연결되어 있는지 계속 확인
+    while (central.connected()) {
+      // 시리얼 모니터에서 입력된 데이터 전송
+      if (Serial.available()) {
+        String inputData = Serial.readStringUntil('\n');
+        txCharacteristic.writeValue(inputData.c_str(), inputData.length());
+        Serial.print("Sent from Serial Monitor to central: ");
+        Serial.println(inputData);
+      }
+
+      // RX 특성에 데이터가 쓰여진 경우
+      if (rxCharacteristic.written()) {
+        // 수신된 값의 길이를 가져옴
+        int length = rxCharacteristic.valueLength();
+        
+        // 수신된 데이터를 저장할 버퍼 할당
+        char receivedData[length + 1];  // +1 to add null terminator
+        
+        // 특성에서 값을 읽음
+        rxCharacteristic.readValue((uint8_t*)receivedData, length);
+        
+        // 문자열 끝에 널 문자를 추가
+        receivedData[length] = '\0';
+        
+        // 수신된 데이터를 시리얼 모니터에 출력
+        Serial.print("Received from central: ");
+        Serial.println(receivedData);
+      }
     }
-    if (!deviceConnected && oldDeviceConnected) {
-        delay(500);
-        pServer->startAdvertising();
-        Serial.println("start advertising");
-        oldDeviceConnected = deviceConnected;
-    }
-    if (deviceConnected && !oldDeviceConnected) {
-        oldDeviceConnected = deviceConnected;        
-    }    
+
+    // 중앙 장치 연결 해제됨
+    Serial.println("Central disconnected");
+  }
 }
